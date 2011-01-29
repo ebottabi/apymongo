@@ -43,7 +43,7 @@ class Database(object):
     """A Mongo database.
     """
 
-    def __init__(self, connection, name):
+    def __init__(self, connection, name, js_callback=None):
         """Get a database by connection and name.
 
         Raises :class:`TypeError` if `name` is not an instance of
@@ -221,7 +221,7 @@ class Database(object):
             son = manipulator.transform_outgoing(son, collection)
         return son
 
-    def command(self, command, value=1,
+    def command(self, command, callback=None,value=1,
                 check=True, allowable_errors=[], **kwargs):
         """Issue a MongoDB command.
 
@@ -283,26 +283,37 @@ class Database(object):
 
         command.update(kwargs)
 
-        result = self["$cmd"].find_one(command,
+        if callback:
+			def mod_callback(result):
+				 if check:
+					 msg = "command %r failed: %%s" % command
+					 check_result = helpers._check_command_response(result, self.connection.disconnect,
+												msg, allowable_errors)
+			  
+				 callback(check_result)
+	    else:		
+			mod_callback = None
+			
+        self["$cmd"].find_one(command,callback=mod_callback,
                                        _must_use_master=True,
                                        _is_command=True)
 
-        if check:
-            msg = "command %r failed: %%s" % command
-            helpers._check_command_response(result, self.connection.disconnect,
-                                            msg, allowable_errors)
+  
 
-        return result
-
-    def collection_names(self):
+    def collection_names(self,callback):
         """Get a list of all the collection names in this database.
         """
-        results = self["system.namespaces"].find(_must_use_master=True)
-        names = [r["name"] for r in results]
-        names = [n[len(self.__name) + 1:] for n in names
-                 if n.startswith(self.__name + ".")]
-        names = [n for n in names if "$" not in n]
-        return names
+   
+        def mod_callback(results):
+
+			names = [r["name"] for r in results]
+			names = [n[len(self.__name) + 1:] for n in names
+					 if n.startswith(self.__name + ".")]
+			names = [n for n in names if "$" not in n]
+			callback(names)      
+        
+        self["system.namespaces"].find(callback=mod_callback,_must_use_master=True)
+
 
     def drop_collection(self, name_or_collection):
         """Drop a collection.
@@ -322,8 +333,9 @@ class Database(object):
         self.__connection._purge_index(self.__name, name)
 
         self.command("drop", unicode(name), allowable_errors=["ns not found"])
+        
 
-    def validate_collection(self, name_or_collection):
+    def validate_collection(self, name_or_collection,callback):
         """Validate a collection.
 
         Returns a string of validation info. Raises CollectionInvalid if
@@ -337,14 +349,17 @@ class Database(object):
             raise TypeError("name_or_collection must be an instance of "
                             "(Collection, str, unicode)")
 
-        result = self.command("validate", unicode(name))
+        def mod_callback(result):
+            info = result["result"]
+            if info.find("exception") != -1 or info.find("corrupt") != -1:
+                raise CollectionInvalid("%s invalid: %s" % (name, info))
+            callback(info)          
 
-        info = result["result"]
-        if info.find("exception") != -1 or info.find("corrupt") != -1:
-            raise CollectionInvalid("%s invalid: %s" % (name, info))
-        return info
+        self.command("validate", unicode(name),callback=mod_callback)
 
-    def profiling_level(self):
+
+
+    def profiling_level(self,callback):
         """Get the database's current profiling level.
 
         Returns one of (:data:`~pymongo.OFF`,
@@ -352,10 +367,13 @@ class Database(object):
 
         .. mongodoc:: profiling
         """
-        result = self.command("profile", -1)
+        
+        def mod_callback(result):
+            assert result["was"] >= 0 and result["was"] <= 2
+            callback(result["was"])
+        
+        self.command("profile", callback=mod_callback,value = -1)
 
-        assert result["was"] >= 0 and result["was"] <= 2
-        return result["was"]
 
     def set_profiling_level(self, level):
         """Set the database's profiling level.
@@ -374,44 +392,59 @@ class Database(object):
 
         self.command("profile", level)
 
-    def profiling_info(self):
+    def profiling_info(self,callback):
         """Returns a list containing current profiling information.
 
         .. mongodoc:: profiling
         """
-        return list(self["system.profile"].find())
+        
+        
+        self["system.profile"].find(callback=callback)
+        
 
-    def error(self):
+    def error(self,callback):
         """Get a database error if one occured on the last operation.
 
         Return None if the last operation was error-free. Otherwise return the
         error that occurred.
         """
-        error = self.command("getlasterror")
-        if error.get("err", 0) is None:
-            return None
-        if error["err"] == "not master":
-            self.__connection.disconnect()
-        return error
+        
+        def mod_callback(error):
+            if error.get("err", 0) is None:
+                callback(None)
+                
+            if error["err"] == "not master":
+                self.__connection.disconnect()
+                
+            callback(error)
+  
+        self.command("getlasterror",callback=mod_callback)
 
-    def last_status(self):
+
+
+    def last_status(self,callback):
         """Get status information from the last operation.
 
         Returns a SON object with status information.
         """
-        return self.command("getlasterror")
+        self.command("getlasterror",callback=callback)
+        
 
-    def previous_error(self):
+    def previous_error(self,callback):
         """Get the most recent error to have occurred on this database.
 
         Only returns errors that have occurred since the last call to
         `Database.reset_error_history`. Returns None if no such errors have
         occurred.
         """
-        error = self.command("getpreverror")
-        if error.get("err", 0) is None:
-            return None
-        return error
+        
+        def mod_callback(error):
+			if error.get("err", 0) is None:
+				error = None
+			callback(error)          
+        
+        self.command("getpreverror",callback=mod_callback)
+
 
     def reset_error_history(self):
         """Reset the error history of this database.
@@ -459,7 +492,7 @@ class Database(object):
         """
         self.system.users.remove({"user": name}, safe=True)
 
-    def authenticate(self, name, password):
+    def authenticate(self, name, password,callback=None):
         """Authenticate to use this database.
 
         Once authenticated, the user has full read and write access to
@@ -507,14 +540,30 @@ class Database(object):
         if not isinstance(password, basestring):
             raise TypeError("password must be an instance of basestring")
 
-        nonce = self.command("getnonce")["nonce"]
-        key = helpers._auth_key(nonce, name, password)
-        try:
-            self.command("authenticate", user=unicode(name),
-                         nonce=nonce, key=key)
-            return True
-        except OperationFailure:
-            return False
+
+        def mod_callback2(result):
+            result = not isinstance(result,OperationFailure)
+            callback(result)
+
+
+        def mod_callback(result)
+			nonce = result["nonce"]
+			
+			key = helpers._auth_key(nonce, name, password)
+			
+			self.command("authenticate",callback = mod_callback2, user=unicode(name),
+							 nonce=nonce, key=key)
+							 
+			try:
+				self.command("authenticate", 
+				return True
+			except OperationFailure:
+				return False
+            
+
+        self.command("getnonce",callback=mod_callback)        
+
+
 
     def logout(self):
         """Deauthorize use of this database for this connection.
@@ -523,7 +572,7 @@ class Database(object):
         """
         self.command("logout")
 
-    def dereference(self, dbref):
+    def dereference(self, dbref,callback):
         """Dereference a :class:`~bson.dbref.DBRef`, getting the
         document it points to.
 
@@ -542,9 +591,12 @@ class Database(object):
             raise ValueError("trying to dereference a DBRef that points to "
                              "another database (%r not %r)" % (dbref.database,
                                                                self.__name))
-        return self[dbref.collection].find_one({"_id": dbref.id})
+                                                               
+  
+        self[dbref.collection].find_one({"_id": dbref.id},callback=callback)
 
-    def eval(self, code, *args):
+
+    def eval(self, code, callback, *args):
         """Evaluate a JavaScript expression in MongoDB.
 
         Useful if you need to touch a lot of data lightly; in such a
@@ -566,9 +618,13 @@ class Database(object):
         """
         if not isinstance(code, Code):
             code = Code(code)
+            
+        def mod_callback(result)
+            callback(result.get("retval", None))
 
-        result = self.command("$eval", code, args=args)
-        return result.get("retval", None)
+        self.command("$eval", callback = mod_callback, value = code, args=args)
+        
+       
 
     def __call__(self, *args, **kwargs):
         """This is only here so that some API misusages are easier to debug.
@@ -597,7 +653,7 @@ class SystemJS(object):
           >>> db.system_js.add1 = "function (x) { return x + 1; }"
           >>> db.system.js.find({"_id": "add1"}).count()
           1
-          >>> db.system_js.add1(5)
+          >>> db.system_js.add1(callback,5)
           6.0
           >>> del db.system_js.add1
           >>> db.system.js.find({"_id": "add1"}).count()
@@ -609,7 +665,8 @@ class SystemJS(object):
         """
         # can't just assign it since we've overridden __setattr__
         object.__setattr__(self, "_db", database)
-
+        
+    
     def __setattr__(self, name, code):
         self._db.system.js.save({"_id": name, "value": Code(code)}, safe=True)
 
@@ -617,12 +674,16 @@ class SystemJS(object):
         self._db.system.js.remove({"_id": name}, safe=True)
 
     def __getattr__(self, name):
-        return lambda *args: self._db.eval("function() { return %s.apply(this,"
-                                           "arguments); }" % name, *args)
+        return lambda callback,*args: self._db.eval("function() { return %s.apply(this,"
+                                           "arguments); }" % name,callback, *args)
 
-    def list(self):
+    def list(self,callback):
         """Get a list of the names of the functions stored in this database.
 
         .. versionadded:: 1.9
         """
-        return [x["_id"] for x in self._db.system.js.find(fields=["_id"])]
+        
+        def mod_callback(result):
+            callback( [x["_id"] for x in result ] )
+        
+        self._db.system.js.find(fields=["_id"],callback=mod_callback)

@@ -109,9 +109,9 @@ class Collection(object):
         if options:
             if "size" in options:
                 options["size"] = float(options["size"])
-            self.__database.command("create", self.__name, **options)
+            self.__database.command("create", value = self.__name, **options)
         else:
-            self.__database.command("create", self.__name)
+            self.__database.command("create", value = self.__name)
 
     def __getattr__(self, name):
         """Get a sub-collection of this collection by name.
@@ -165,7 +165,7 @@ class Collection(object):
         """
         return self.__database
 
-    def save(self, to_save, manipulate=True, safe=False, **kwargs):
+    def save(self, to_save, callback=None,manipulate=True, safe=False, **kwargs):
         """Save a document in this collection.
 
         If `to_save` already has an ``"_id"`` then an :meth:`update`
@@ -203,16 +203,23 @@ class Collection(object):
         """
         if not isinstance(to_save, dict):
             raise TypeError("cannot save object of type %s" % type(to_save))
-
+            
+      
         if "_id" not in to_save:
-            return self.insert(to_save, manipulate, safe, **kwargs)
+            self.insert(to_save, manipulate, safe, callback=callback, **kwargs)
         else:
+            if callback:
+                def mod_callback(result):
+                    callback( to_save.get("_id", None) )
+            else:
+                mod_callback = None
+                 
             self.update({"_id": to_save["_id"]}, to_save, True,
-                        manipulate, safe, **kwargs)
-            return to_save.get("_id", None)
+                        manipulate, safe, callback=mod_callback **kwargs)
+           
 
     def insert(self, doc_or_docs,
-               manipulate=True, safe=False, check_keys=True, **kwargs):
+               manipulate=True, safe=False, check_keys=True, callback=None, **kwargs):
         """Insert a document(s) into this collection.
 
         If `manipulate` is set, the document(s) are manipulated using
@@ -265,15 +272,21 @@ class Collection(object):
 
         if kwargs:
             safe = True
+            
+        if callback:
+			def mod_callback(result):
+				ids = [doc.get("_id", None) for doc in docs]
+				callback(return_one and ids[0] or ids)
+		else:
+		    mod_callback = None
+               
         self.__database.connection._send_message(
             message.insert(self.__full_name, docs,
-                           check_keys, safe, kwargs), safe)
+                           check_keys, safe, kwargs), with_last_error=safe,callback=mod_callback)
 
-        ids = [doc.get("_id", None) for doc in docs]
-        return return_one and ids[0] or ids
 
     def update(self, spec, document, upsert=False, manipulate=False,
-               safe=False, multi=False, **kwargs):
+               safe=False, multi=False,callback=callback, **kwargs):
         """Update a document(s) in this collection.
 
         Raises :class:`TypeError` if either `spec` or `document` is
@@ -358,9 +371,9 @@ class Collection(object):
         if kwargs:
             safe = True
 
-        return self.__database.connection._send_message(
+        self.__database.connection._send_message(
             message.update(self.__full_name, upsert, multi,
-                           spec, document, safe, kwargs), safe)
+                           spec, document, safe, kwargs), with_last_error = safe, callback=callback)
 
     def drop(self):
         """Alias for :meth:`~pymongo.database.Database.drop_collection`.
@@ -374,7 +387,7 @@ class Collection(object):
         """
         self.__database.drop_collection(self.__name)
 
-    def remove(self, spec_or_id=None, safe=False, **kwargs):
+    def remove(self, spec_or_id=None, safe=False, callback=None,**kwargs):
         """Remove a document(s) from this collection.
 
         .. warning:: Calls to :meth:`remove` should be performed with
@@ -432,10 +445,10 @@ class Collection(object):
         if kwargs:
             safe = True
 
-        return self.__database.connection._send_message(
-            message.delete(self.__full_name, spec_or_id, safe, kwargs), safe)
+        self.__database.connection._send_message(
+            message.delete(self.__full_name, spec_or_id, safe, kwargs), with_last_error=safe,callback=callback)
 
-    def find_one(self, spec_or_id=None, *args, **kwargs):
+    def find_one(self, callback=None, spec_or_id=None, *args, **kwargs):
         """Get a single document from the database.
 
         All arguments to :meth:`find` are also valid arguments for
@@ -465,11 +478,16 @@ class Collection(object):
         """
         if spec_or_id is not None and not isinstance(spec_or_id, dict):
             spec_or_id = {"_id": spec_or_id}
-
-        for result in self.find(spec_or_id, *args, **kwargs).limit(-1):
-            return result
-        return None
-
+            
+        def mod_callback(resp):
+            if resp:
+                callback(resp[0])
+            else:
+                callback(None)                 
+        
+        self.find(spec_or_id, callback = mod_callback, *args, **kwargs).limit(-1)
+        
+        
     def find(self, *args, **kwargs):
         """Query the database.
 
@@ -549,7 +567,8 @@ class Collection(object):
 
         .. mongodoc:: find
         """
-        return Cursor(self, *args, **kwargs)
+        Cursor(self, *args, **kwargs)
+
 
     def count(self):
         """Get the number of documents in this collection.
@@ -558,9 +577,31 @@ class Collection(object):
         :meth:`pymongo.cursor.Cursor.count`.
         """
         return self.find().count()
+        
+        
+    def distinct(self, key):
+        """Get a list of distinct values for `key` among all documents
+        in this collection.
+
+        Raises :class:`TypeError` if `key` is not an instance of
+        :class:`basestring`.
+
+        To get the distinct values for a key in the result set of a
+        query use :meth:`~pymongo.cursor.Cursor.distinct`.
+
+        :Parameters:
+          - `key`: name of key for which we want to get the distinct values
+
+        .. note:: Requires server version **>= 1.1.0**
+
+        .. versionadded:: 1.1.1
+        """
+        return self.find().distinct(key)
+        
+        
 
     def create_index(self, key_or_list, deprecated_unique=None,
-                     ttl=300, **kwargs):
+                     ttl=300, callback = None, **kwargs):
         """Creates an index on this collection.
 
         Takes either a single key or a list of (key, direction) pairs.
@@ -633,17 +674,28 @@ class Collection(object):
             kwargs["dropDups"] = kwargs.pop("drop_dups")
 
         index.update(kwargs)
+        
+        
+        def mod_callback(resp):
+            
+            if not isinstance(resp,Exception):
+				self.__database.connection._cache_index(self.__database.name,
+													self.__name, name, ttl)
+			    if callback:
+			        callback(name)
+			else:
+			    if callback:
+			        callback(resp)
+			    else:
+			        raise resp
+                
 
         self.__database.system.indexes.insert(index, manipulate=False,
                                               check_keys=False,
-                                              safe=True)
+                                              safe=True,callback = mod_callback)
 
-        self.__database.connection._cache_index(self.__database.name,
-                                                self.__name, name, ttl)
 
-        return name
-
-    def ensure_index(self, key_or_list, deprecated_unique=None,
+    def ensure_index(self, key_or_list, callback=None,deprecated_unique=None,
                      ttl=300, **kwargs):
         """Ensures that an index exists on this collection.
 
@@ -713,9 +765,11 @@ class Collection(object):
 
         if self.__database.connection._cache_index(self.__database.name,
                                                    self.__name, name, ttl):
-            return self.create_index(key_or_list, deprecated_unique,
-                                     ttl, **kwargs)
-        return None
+            self.create_index(key_or_list, deprecated_unique = deprecated_unique,
+                                     ttl = ttl, callback = callback, **kwargs)
+        elif callback:
+            callback(None)
+
 
     def drop_indexes(self):
         """Drops all indexes on this collection.
@@ -726,6 +780,7 @@ class Collection(object):
         self.__database.connection._purge_index(self.__database.name,
                                                 self.__name)
         self.drop_index(u"*")
+
 
     def drop_index(self, index_or_name):
         """Drops the specified index on this collection.
@@ -753,10 +808,11 @@ class Collection(object):
 
         self.__database.connection._purge_index(self.__database.name,
                                                 self.__name, name)
-        self.__database.command("dropIndexes", self.__name, index=name,
+        self.__database.command("dropIndexes", value = self.__name, index=name,
                                 allowable_errors=["ns not found"])
+                                
 
-    def index_information(self):
+    def index_information(self,callback):
         """Get information on this collection's indexes.
 
         Returns a dictionary where the keys are index names (as
@@ -781,16 +837,21 @@ class Collection(object):
            themselves, whose ``"key"`` item contains the list that was
            the value in previous versions of PyMongo.
         """
-        raw = self.__database.system.indexes.find({"ns": self.__full_name},
-                                                  {"ns": 0}, as_class=SON)
-        info = {}
-        for index in raw:
-            index["key"] = index["key"].items()
-            index = dict(index)
-            info[index.pop("name")] = index
-        return info
+        
+        def mod_callback(raw):
+			info = {}
+			for index in raw:
+				index["key"] = index["key"].items()
+				index = dict(index)
+				info[index.pop("name")] = index
+			callback( info )
+        
+        self.__database.system.indexes.find(spec={"ns": self.__full_name},
+                                            fields={"ns": 0}, 
+                                            callback = mod_callback, as_class=SON)
 
-    def options(self):
+
+    def options(self,callback):
         """Get the options set on this collection.
 
         Returns a dictionary of options and their values - see
@@ -798,21 +859,25 @@ class Collection(object):
         information on the possible options. Returns an empty
         dictionary if the collection has not been created yet.
         """
-        result = self.__database.system.namespaces.find_one(
-            {"name": self.__full_name})
+        
+        def mod_callback(result):
+			if not result:
+				callback({})
+	
+			options = result.get("options", {})
+			if "create" in options:
+				del options["create"]
+	
+			callback( options )
+        
+        self.__database.system.namespaces.find_one(
+            {"name": self.__full_name},callback=mod_callback)
 
-        if not result:
-            return {}
 
-        options = result.get("options", {})
-        if "create" in options:
-            del options["create"]
-
-        return options
 
     # TODO key and condition ought to be optional, but deprecation
     # could be painful as argument order would have to change.
-    def group(self, key, condition, initial, reduce, finalize=None,
+    def group(self, callback, key, condition, initial, reduce, finalize=None,
               command=True):
         """Perform a query similar to an SQL *group by* operation.
 
@@ -860,7 +925,11 @@ class Collection(object):
         if finalize is not None:
             group["finalize"] = Code(finalize)
 
-        return self.__database.command("group", group)["retval"]
+        def mod_callback(resp):
+            callback(resp["retval"])
+        
+        self.__database.command("group", callback=mod_callback, value = group)
+        
 
     def rename(self, new_name, **kwargs):
         """Rename this collection.
@@ -892,29 +961,12 @@ class Collection(object):
 
         new_name = "%s.%s" % (self.__database.name, new_name)
         self.__database.connection.admin.command("renameCollection",
-                                                 self.__full_name,
+                                                 value = self.__full_name,
                                                  to=new_name, **kwargs)
 
-    def distinct(self, key):
-        """Get a list of distinct values for `key` among all documents
-        in this collection.
 
-        Raises :class:`TypeError` if `key` is not an instance of
-        :class:`basestring`.
 
-        To get the distinct values for a key in the result set of a
-        query use :meth:`~pymongo.cursor.Cursor.distinct`.
-
-        :Parameters:
-          - `key`: name of key for which we want to get the distinct values
-
-        .. note:: Requires server version **>= 1.1.0**
-
-        .. versionadded:: 1.1.1
-        """
-        return self.find().distinct(key)
-
-    def map_reduce(self, map, reduce, full_response=False, **kwargs):
+    def map_reduce(self, callback, map, reduce, full_response=False, **kwargs):
         """Perform a map/reduce operation on this collection.
 
         If `full_response` is ``False`` (default) returns a
@@ -943,13 +995,19 @@ class Collection(object):
 
         .. mongodoc:: mapreduce
         """
-        response = self.__database.command("mapreduce", self.__name,
+        
+        def mod_callback(response):
+            if full_response:
+                callback(response)
+            callback(self.__database[response["result"]])
+            
+            
+        self.__database.command("mapreduce", callback = mod_callback, value=self.__name,
                                            map=map, reduce=reduce, **kwargs)
-        if full_response:
-            return response
-        return self.__database[response["result"]]
 
-    def find_and_modify(self, query={}, update=None, upsert=False, **kwargs):
+
+
+    def find_and_modify(self, callback, query={}, update=None, upsert=False, **kwargs):
         """Update and return an object.
 
         This is a thin wrapper around the findAndModify_ command. The
@@ -996,17 +1054,19 @@ class Collection(object):
 
         no_obj_error = "No matching object found"
 
-        out = self.__database.command("findAndModify", self.__name,
+        def mod_callback(out):
+            if not out['ok']:
+				if out["errmsg"] == no_obj_error:
+					callback(None)
+				else:
+					# Should never get here b/c of allowable_errors
+					callback( ValueError("Unexpected Error: %s"%out) )
+
+            callback( out['value'] )
+        
+        self.__database.command("findAndModify", callback = mod_callback, value = self.__name,
                 allowable_errors=[no_obj_error], **kwargs)
 
-        if not out['ok']:
-            if out["errmsg"] == no_obj_error:
-                return None
-            else:
-                # Should never get here b/c of allowable_errors
-                raise ValueError("Unexpected Error: %s"%out)
-
-        return out['value']
 
     def __iter__(self):
         return self

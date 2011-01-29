@@ -111,13 +111,14 @@ def _unpack_response(response, cursor_id=None, as_class=dict, tz_aware=False):
 def _check_command_response(response, reset, msg="%s", allowable_errors=[]):
     if not response["ok"]:
         if "wtimeout" in response and response["wtimeout"]:
-            raise TimeoutError(msg % response["errmsg"])
+            return TimeoutError(msg % response["errmsg"])
         if not response["errmsg"] in allowable_errors:
             if response["errmsg"] == "not master":
                 reset()
-                raise AutoReconnect("not master")
-            raise OperationFailure(msg % response["errmsg"])
+                return AutoReconnect("not master")
+            return OperationFailure(msg % response["errmsg"])
 
+    return response
 
 def _password_digest(username, password):
     """Get a password digest to use for authentication.

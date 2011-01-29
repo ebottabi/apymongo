@@ -20,7 +20,7 @@ from distutils.errors import DistutilsPlatformError, DistutilsExecError
 from distutils.core import Extension
 
 # Remember to change in pymongo/__init__.py as well!
-version = "1.9+"
+version = "0.0.1"
 
 f = open("README.rst")
 try:
@@ -134,9 +134,9 @@ c_ext = Feature(
                                     'bson/time64.c',
                                     'bson/buffer.c',
                                     'bson/encoding_helpers.c']),
-                 Extension('pymongo._cmessage',
+                 Extension('apymongo._cmessage',
                            include_dirs=['bson'],
-                           sources=['pymongo/_cmessagemodule.c',
+                           sources=['apymongo/_cmessagemodule.c',
                                     'bson/_cbsonmodule.c',
                                     'bson/time64.c',
                                     'bson/buffer.c',
@@ -158,16 +158,16 @@ else:
     features = {"c-ext": c_ext}
 
 setup(
-    name="pymongo",
+    name="apymongo",
     version=version,
-    description="Python driver for MongoDB <http://www.mongodb.org>",
+    description="Asychronous version of PyMongo based Tornado's IOStream.",
     long_description=readme_content,
-    author="Mike Dirolf",
-    author_email="mongodb-user@googlegroups.com",
-    url="http://github.com/mongodb/mongo-python-driver",
-    keywords=["mongo", "mongodb", "pymongo", "gridfs", "bson"],
-    packages=["bson", "pymongo", "gridfs"],
-    install_requires=[],
+    author="Dan Yamins",
+    author_email="dyamins@gmail.com",
+    url="http://github.com/mongodb/apymongo",
+    keywords=["mongo", "mongodb", "pymongo", "bson","asynchrous","async","tornado","iostream"],
+    packages=["apymongo","bson"],
+    install_requires=["tornado"],
     features=features,
     license="Apache License, Version 2.0",
     test_suite="nose.collector",

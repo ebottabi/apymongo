@@ -37,7 +37,6 @@ import datetime
 import os
 import select
 import socket
-import struct
 import threading
 import time
 import warnings
@@ -136,41 +135,42 @@ def _parse_uri(uri, default_port=27017):
 
     return (host_list, db, username, password, collection, options)
 
+             
+def receive_body_on_stream(operation,request_id,strm,callback,header):
+                            
+        length = struct.unpack("<i", header[:4])[0]
+        assert request_id == struct.unpack("<i", header[8:12])[0], \
+            "ids don't match %r %r" % (request_id,
+                                       struct.unpack("<i", header[8:12])[0])
+        assert operation == struct.unpack("<i", header[12:])[0]
 
-def _closed(sock):
-    """Return True if we know socket has been closed, False otherwise.
-    """
-    rd, _, _ = select.select([sock], [], [], 0)
-    try:
-        return len(rd) and sock.recv() == ""
-    except:
-        return True
-
+        strm.read_bytes(length-16,callback)
+        
 
 class _Pool(threading.local):
     """A simple connection pool.
 
-    Uses thread-local socket per thread. By calling return_socket() a
-    thread can return a socket to the pool. Right now the pool size is
-    capped at 10 sockets - we can expose this as a parameter later, if
+    Uses thread-local stream per thread. By calling return_stream() a
+    thread can return a stream to the pool. Right now the pool size is
+    capped at 10 streams - we can expose this as a parameter later, if
     needed.
     """
 
     # Non thread-locals
-    __slots__ = ["sockets", "socket_factory", "pool_size", "pid"]
+    __slots__ = ["streams", "stream_factory", "pool_size", "pid"]
 
     # thread-local default
-    sock = None
+    stream = None
 
-    def __init__(self, socket_factory):
+    def __init__(self, stream_factory):
         self.pid = os.getpid()
         self.pool_size = 10
-        self.socket_factory = socket_factory
-        if not hasattr(self, "sockets"):
-            self.sockets = []
+        self.stream_factory = socket_factory
+        if not hasattr(self, "streams"):
+            self.streams = []
 
 
-    def socket(self):
+    def get_stream(self,callback):
         # We use the pid here to avoid issues with fork / multiprocessing.
         # See test.test_connection:TestConnection.test_fork for an example of
         # what could go wrong otherwise
@@ -178,29 +178,35 @@ class _Pool(threading.local):
 
         if pid != self.pid:
             self.sock = None
-            self.sockets = []
+            self.streams = []
             self.pid = pid
 
-        if self.sock is not None and self.sock[0] == pid:
-            return self.sock[1]
+        if self.stream is not None and self.stream[0] == pid:
+            callback(self.stream[1])
 
         try:
-            self.sock = (pid, self.sockets.pop())
+            self.stream = (pid, self.streams.pop())
         except IndexError:
-            self.sock = (pid, self.socket_factory())
+            def stream_callback(strm):
+                self.stream = (pid,strm)
+                callback(strm)
+                
+            self.stream_factory(stream_callback)
+            
+        else:
+            callback(self.stream[1])
+            
 
-        return self.sock[1]
-
-    def return_socket(self):
-        if self.sock is not None and self.sock[0] == os.getpid():
+    def return_stream(self):
+        if self.stream is not None and self.stream[0] == os.getpid():
             # There's a race condition here, but we deliberately
             # ignore it.  It means that if the pool_size is 10 we
             # might actually keep slightly more than that.
-            if len(self.sockets) < self.pool_size:
-                self.sockets.append(self.sock[1])
+            if len(self.streams) < self.pool_size:
+                self.streams.append(self.stream[1])
             else:
-                self.sock[1].close()
-        self.sock = None
+                self.stream[1].close()
+        self.stream = None
 
 
 class Connection(object):  # TODO support auth for pooling
@@ -210,7 +216,7 @@ class Connection(object):  # TODO support auth for pooling
     HOST = "localhost"
     PORT = 27017
 
-    def __init__(self, host=None, port=None, pool_size=None,
+    def __init__(self, host=None, port=None, pool_size=None,io_loop=None,
                  auto_start_request=None, timeout=None, slave_okay=False,
                  network_timeout=None, document_class=dict, tz_aware=False,
                  _connect=True):
@@ -317,6 +323,8 @@ class Connection(object):  # TODO support auth for pooling
 
         self.__host = None
         self.__port = None
+        
+        self.__io_loop = io_loop
 
         if options.has_key("slaveok"):
             self.__slave_okay = options['slaveok'][0].upper()=='T'
@@ -348,9 +356,10 @@ class Connection(object):  # TODO support auth for pooling
             self.__find_master()
 
         if username:
-            database = database or "admin"
-            if not self[database].authenticate(username, password):
-                raise ConfigurationError("authentication failed")
+            database = database or "admin"                
+            auth_err = lambda x : if not x: raise ConfigurationError("authentication failed")
+            self[database].authenticate(username, password, auth_err)
+            
 
     @classmethod
     def from_uri(cls, uri="mongodb://localhost", **connection_args):
@@ -493,6 +502,39 @@ class Connection(object):  # TODO support auth for pooling
         """
         return self.__tz_aware
 
+
+    def __find_master(self):
+        """
+           do it and downstream with callbacks
+        """
+        # Special case the first node to try to get the primary or any
+        # additional hosts from a replSet:
+        first = iter(self.__nodes).next()
+
+        callback = functools.partial(self.__callback_master,self)
+        self.__try_node(first,callback)
+        
+
+    def __try_node(self, node,callback):
+        self.disconnect()
+        self.__host, self.__port = node
+        self.admin.command("ismaster",callback=callback)
+        
+
+    def __callback_master(self,response):
+           
+		primary = self.__add_hosts_and_get_primary(response)
+		self.end_request()
+		
+		if response["ismaster"]:
+			primary = True
+ 
+        if (primary is True) or (self.__slave_okay and primary is not None):
+            return first
+        
+        raise AutoReconnect("could not find master/primary")
+        
+
     def __add_hosts_and_get_primary(self, response):
         if "hosts" in response:
             self.__nodes.update([_str_to_node(h) for h in response["hosts"]])
@@ -500,78 +542,29 @@ class Connection(object):  # TODO support auth for pooling
             return _str_to_node(response["primary"])
         return False
 
-    def __try_node(self, node):
-        self.disconnect()
-        self.__host, self.__port = node
-        try:
-            response = self.admin.command("ismaster")
-            self.end_request()
 
-            primary = self.__add_hosts_and_get_primary(response)
-            if response["ismaster"]:
-                return True
-            return primary
-        except:
-            self.end_request()
-            return None
-
-    def __find_master(self):
-        """Create a new socket and use it to figure out who the master is.
-
-        Sets __host and __port so that :attr:`host` and :attr:`port`
-        will return the address of the master. Also (possibly) updates
-        any replSet information.
-        """
-        # Special case the first node to try to get the primary or any
-        # additional hosts from a replSet:
-        first = iter(self.__nodes).next()
-
-        primary = self.__try_node(first)
-        if primary is True:
-            return first
-
-        # no network error
-        if self.__slave_okay and primary is not None:
-            return first
-
-        # Wasn't the first node, but we got a primary - let's try it:
-        tried = [first]
-        if primary:
-            if self.__try_node(primary) is True:
-                return primary
-            tried.append(primary)
-
-        nodes = self.__nodes - set(tried)
-
-        # Just scan
-        # TODO parallelize these to minimize connect time?
-        for node in nodes:
-            if self.__try_node(node) is True:
-                return node
-
-        raise AutoReconnect("could not find master/primary")
-
-    def __connect(self):
+    def __connect(self,callback):
         """(Re-)connect to Mongo and return a new (connected) socket.
 
         Connect to the master if this is a paired connection.
         """
-        host, port = (self.__host, self.__port)
-        if host is None or port is None:
-            host, port = self.__find_master()
-
+        host, port = self.__host, self.__port
+        
         try:
-            sock = socket.socket()
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            sock.settimeout(self.__network_timeout or _CONNECT_TIMEOUT)
-            sock.connect((host, port))
-            sock.settimeout(self.__network_timeout)
-            return sock
-        except socket.error:
+			sock = socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+			sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+			stream = tornado.iostream.IOStream(sock,self.__io_loop)
+        except:
             self.disconnect()
             raise AutoReconnect("could not connect to %r" % list(self.__nodes))
+        else:
+            def scallback():
+                callback(stream)
+            stream.connect((host,port),callback=scallback)
+        
+                         
 
-    def __socket(self):
+    def __stream(self,callback):
         """Get a socket from the pool.
 
         If it's been > 1 second since the last time we checked out a
@@ -582,14 +575,19 @@ class Connection(object):  # TODO support auth for pooling
         the last socket checkout, to keep performance reasonable - we
         can't avoid those completely anyway.
         """
-        sock = self.__pool.socket()
-        t = time.time()
-        if t - self.__last_checkout > 1:
-            if _closed(sock):
-                self.disconnect()
-                sock = self.__pool.socket()
-        self.__last_checkout = t
-        return sock
+        
+        def scallback(strm):
+			t = time.time()
+			if t - self.__last_checkout > 1 and stream._check_closed():
+			    self.disconnect()
+				self.__pool.get_stream(scallback)
+		    else:
+    			self.__last_checkout = t
+	    		callback(strm)
+  
+        self.__pool.get_stream(scallback)
+        
+
 
     def disconnect(self):
         """Disconnect from MongoDB.
@@ -640,24 +638,26 @@ class Connection(object):  # TODO support auth for pooling
         assert response["number_returned"] == 1
         error = response["data"][0]
 
-        helpers._check_command_response(error, self.disconnect)
+        response = helpers._check_command_response(error, self.disconnect)
 
         # TODO unify logic with database.error method
         if error.get("err", 0) is None:
             return error
         if error["err"] == "not master":
             self.disconnect()
-            raise AutoReconnect("not master")
+            return AutoReconnect("not master")
 
         if "code" in error:
             if error["code"] in [11000, 11001, 12582]:
-                raise DuplicateKeyError(error["err"])
+                return DuplicateKeyError(error["err"])
             else:
-                raise OperationFailure(error["err"], error["code"])
+                return OperationFailure(error["err"], error["code"])
         else:
-            raise OperationFailure(error["err"])
+            return OperationFailure(error["err"])
+        
+        return response
 
-    def _send_message(self, message, with_last_error=False):
+    def _send_message(self, message,with_last_error=False,callback=None):
         """Say something to Mongo.
 
         Raises ConnectionFailure if the message cannot be sent. Raises
@@ -671,62 +671,52 @@ class Connection(object):  # TODO support auth for pooling
           - `with_last_error`: check getLastError status after sending the
             message
         """
-        sock = self.__socket()
-        try:
-            (request_id, data) = message
-            sock.sendall(data)
-            # Safe mode. We pack the message together with a lastError
-            # message and send both. We then get the response (to the
-            # lastError) and raise OperationFailure if it is an error
-            # response.
-            if with_last_error:
-                response = self.__receive_message_on_socket(1, request_id,
-                                                            sock)
-                return self.__check_response_to_last_error(response)
-            return None
-        except (ConnectionFailure, socket.error), e:
-            self.disconnect()
-            raise AutoReconnect(str(e))
 
-    def __receive_data_on_socket(self, length, sock):
-        """Lowest level receive operation.
+        
+        def send_callback(strm): 
+			(request_id, data) = message
+			try:
+    			strm.write(data)
+    		except (ConnectionFailure,socket.error),e:
+    		    self.disconnect()
+    		    raise AutoReconnect(str(e)) 
+            else:
+                if with_last_error:
+                    assert callback != None
+                    def mod_callback(resp):
+                        resp = self.__check_response_to_last_error(resp)
+                        callback(resp)
+                        
+                    self.__receive_message_on_stream(1,request_d,strm,callback=mod_callback)
+                elif callback:
+                     callback(None)
+	
+		     
+        self.__stream(send_callback)
+        
 
-        Takes length to receive and repeatedly calls recv until able to
-        return a buffer of that length, raising ConnectionFailure on error.
-        """
-        message = ""
-        while len(message) < length:
-            chunk = sock.recv(length - len(message))
-            if chunk == "":
-                raise ConnectionFailure("connection closed")
-            message += chunk
-        return message
-
-    def __receive_message_on_socket(self, operation, request_id, sock):
+    def __receive_message_on_stream(self, operation, request_id, strm,callback):
         """Receive a message in response to `request_id` on `sock`.
 
         Returns the response data with the header removed.
         """
-        header = self.__receive_data_on_socket(16, sock)
-        length = struct.unpack("<i", header[:4])[0]
-        assert request_id == struct.unpack("<i", header[8:12])[0], \
-            "ids don't match %r %r" % (request_id,
-                                       struct.unpack("<i", header[8:12])[0])
-        assert operation == struct.unpack("<i", header[12:])[0]
+     
+        receive_body_curry = functools.partial(receive_body_on_stream,operation,request_id,strm,callback)
+        strm.read_bytes(16,receive_body_curry)
+        
+        
 
-        return self.__receive_data_on_socket(length - 16, sock)
-
-    def __send_and_receive(self, message, sock):
+    def __send_and_receive(self, message, callback,strm):
         """Send a message on the given socket and return the response data.
         """
         (request_id, data) = message
-        sock.sendall(data)
-        return self.__receive_message_on_socket(1, request_id, sock)
+        strm.write(data)
+        
+        self.__receive_message_on_stream(1, request_id, strm,callback)
+        
 
-    # we just ignore _must_use_master here: it's only relevant for
-    # MasterSlaveConnection instances.
-    def _send_message_with_response(self, message,
-                                    _must_use_master=False, **kwargs):
+
+    def _send_message_with_response(self, message,callback):
         """Send a message to Mongo and return the response.
 
         Sends the given message and returns the response.
@@ -734,19 +724,12 @@ class Connection(object):  # TODO support auth for pooling
         :Parameters:
           - `message`: (request_id, data) pair making up the message to send
         """
-        sock = self.__socket()
+        
+        send_callback = functools.partial(self.__send_and_receive,self,message,callback)
+            
+        self.__stream(self,send_callback)
 
-        try:
-            try:
-                if "network_timeout" in kwargs:
-                    sock.settimeout(kwargs["network_timeout"])
-                return self.__send_and_receive(message, sock)
-            except (ConnectionFailure, socket.error), e:
-                self.disconnect()
-                raise AutoReconnect(str(e))
-        finally:
-            if "network_timeout" in kwargs:
-                sock.settimeout(self.__network_timeout)
+                               
 
     def start_request(self):
         """DEPRECATED all operations will start a request.
@@ -841,19 +824,24 @@ class Connection(object):  # TODO support auth for pooling
         """
         if not isinstance(cursor_ids, list):
             raise TypeError("cursor_ids must be a list")
-        return self._send_message(message.kill_cursors(cursor_ids))
+        self._send_message(message.kill_cursors(cursor_ids))
 
-    def server_info(self):
+    def server_info(self,callback):
         """Get information about the MongoDB server we're connected to.
         """
-        return self.admin.command("buildinfo")
+        self.admin.command("buildinfo",callback)
 
-    def database_names(self):
+    def database_names(self,callback):
         """Get a list of the names of all databases on the connected server.
         """
-        return [db["name"] for db in
-                self.admin.command("listDatabases")["databases"]]
-
+        
+        def ncallback(resp):
+            nlist = [db["name"] for db in resp["databases"]]
+            return callback(nlist)
+            
+        self.admin.command("listDatabases",ncallback)
+        
+        
     def drop_database(self, name_or_database):
         """Drop a database.
 
@@ -875,8 +863,9 @@ class Connection(object):  # TODO support auth for pooling
 
         self._purge_index(name)
         self[name].command("dropDatabase")
+        
 
-    def copy_database(self, from_name, to_name,
+    def copy_database(self, from_name, to_name,callback=None,
                       from_host=None, username=None, password=None):
         """Copy a database, potentially from another host.
 
@@ -915,14 +904,15 @@ class Connection(object):  # TODO support auth for pooling
         if from_host is not None:
             command["fromhost"] = from_host
 
-        if username is not None:
-            nonce = self.admin.command("copydbgetnonce",
-                                       fromhost=from_host)["nonce"]
-            command["username"] = username
-            command["nonce"] = nonce
-            command["key"] = helpers._auth_key(nonce, username, password)
+#         if username is not None:
+#             nonce = self.admin.command("copydbgetnonce",
+#                                        fromhost=from_host)["nonce"]
+#             command["username"] = username
+#             command["nonce"] = nonce
+#             command["key"] = helpers._auth_key(nonce, username, password)
 
-        return self.admin.command("copydb", **command)
+        self.admin.command("copydb",callback=callback, **command)
+
 
     def __iter__(self):
         return self
