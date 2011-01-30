@@ -63,6 +63,8 @@ class Cursor(object):
         """
         self.__id = None
 
+        self.__error = None
+
         if spec is None:
             spec = {}
 
@@ -474,32 +476,36 @@ class Cursor(object):
 
     def loop(self):
         
-        if len(self.__data):
-            
-            collection = self.__collection
-            db = collection.database
-            processor = self.__processor
-            
-            for r in self.__data:
-
-                r = db._fix_outgoing(r, collection)
-               
-                if processor:
-                    r = processor(r,collection)
-                    
-                if self.__store and r:
-                    self.__datastore.append(r)
-                    
-            
-            self.__data = []
-                
-                
-        if not self.__killed:
-            self._refresh()
+        if self.__error:
+            self.__callback(self.__error)
             
         else:
-            
-            self.__callback(self.__datastore)
+            if len(self.__data):
+                
+                collection = self.__collection
+                db = collection.database
+                processor = self.__processor
+                
+                for r in self.__data:
+    
+                    r = db._fix_outgoing(r, collection)
+                   
+                    if processor:
+                        r = processor(r,collection)
+                        
+                    if self.__store and r:
+                        self.__datastore.append(r)
+                        
+                
+                self.__data = []
+                    
+                    
+            if not self.__killed:
+                self._refresh()
+                
+            else:
+                
+                self.__callback(self.__datastore)
         
         
 
@@ -541,38 +547,43 @@ class Cursor(object):
         db = self.__collection.database
 
         def mod_callback(response):
-            if isinstance(response, tuple):
-                (connection_id, response) = response
-            else:
-                connection_id = None
-    
-            self.__connection_id = connection_id
-    
-            try:
-                response = helpers._unpack_response(response, self.__id,
-                                                    self.__as_class,
-                                                    self.__tz_aware)
-            except AutoReconnect:
-                db.connection.disconnect()
-                raise
-                
-            self.__id = response["cursor_id"]
-             
-            # starting from doesn't get set on getmore's for tailable cursors
-            if not self.__tailable:
-                assert response["starting_from"] == self.__retrieved
-    
-            self.__retrieved += response["number_returned"]
-            self.__data = response["data"]
-    
-            die_now = (self.__id == 0) or (len(self.__data) == 0) or (self.__limit and self.__id and self.__limit <= self.__retrieved)
-    
-            if die_now:
-                self.__die()
-                            
             
+            if isinstance(response,Exception):
+                self.__error = response
+                      
+            else:
+                if isinstance(response, tuple):
+                    (connection_id, response) = response
+                else:
+                    connection_id = None
+        
+                self.__connection_id = connection_id
+        
+                try:
+                    response = helpers._unpack_response(response, self.__id,
+                                                        self.__as_class,
+                                                        self.__tz_aware)
+                except AutoReconnect:
+                    db.connection.disconnect()
+                    raise
+                    
+                self.__id = response["cursor_id"]
+                 
+                # starting from doesn't get set on getmore's for tailable cursors
+                if not self.__tailable:                    
+                    assert response["starting_from"] == self.__retrieved
+        
+                self.__retrieved += response["number_returned"]
+                self.__data = response["data"]
+        
+                die_now = (self.__id == 0) or (len(self.__data) == 0) or (self.__limit and self.__id and self.__limit <= self.__retrieved)
+        
+                if die_now:
+                    self.__die()
+                                
+                
             callback()
-
+    
 
         db.connection._send_message_with_response(message,mod_callback)
 

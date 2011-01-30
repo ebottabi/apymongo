@@ -193,7 +193,8 @@ class _Pool(threading.local):
         except IndexError:
         
             def stream_callback(strm):
-                self.stream = (pid,strm)
+                if not isinstance(strm,Exception):
+                    self.stream = (pid,strm)
                 callback(strm)
                 
             self.stream_factory(stream_callback)
@@ -530,16 +531,21 @@ class Connection(object):  # TODO support auth for pooling
 
     def __callback_master(self,response):
            
-        primary = self.__add_hosts_and_get_primary(response)
-        self.end_request()
-        
-        if response["ismaster"]:
-            primary = True
- 
-        if (primary is True) or (self.__slave_okay and primary is not None):
-            return 
-        else:        
-            raise AutoReconnect("could not find master/primary")
+        if isinstance(response,Exception):
+            raise response
+            
+        else:
+       
+            primary = self.__add_hosts_and_get_primary(response)
+            self.end_request()
+            
+            if response["ismaster"]:
+                primary = True
+     
+            if (primary is True) or (self.__slave_okay and primary is not None):
+                return 
+            else:        
+                raise AutoReconnect("could not find master/primary")
         
 
     def __add_hosts_and_get_primary(self, response):
@@ -567,7 +573,10 @@ class Connection(object):  # TODO support auth for pooling
         else:
             def scallback():
                 callback(stream)
-            stream.connect((host,port),callback=scallback)
+            try:
+                stream.connect((host,port),callback=scallback)
+            except:
+                callback(ConnectionFailure())
         
                          
 
@@ -717,9 +726,15 @@ class Connection(object):  # TODO support auth for pooling
         """Send a message on the given socket and return the response data.
         """
         (request_id, data) = message        
-        strm.write(data)
         
-        self.__receive_message_on_stream(1, request_id, strm, callback)
+        if isinstance(strm,Exception):
+  
+            callback(strm)
+            
+        else:
+        
+            strm.write(data)
+            self.__receive_message_on_stream(1, request_id, strm, callback)
         
 
 

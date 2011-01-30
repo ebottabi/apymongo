@@ -286,12 +286,17 @@ class Database(object):
 
         if callback:
             def mod_callback(result):
-                 if check:
-                     msg = "command %r failed: %%s" % command
-                     check_result = helpers._check_command_response(result, self.connection.disconnect,
-                                                msg, allowable_errors)
-              
-                 callback(check_result)
+            
+                 if not isinstance(result,Exception):
+                     if check:
+                         msg = "command %r failed: %%s" % command
+                         check_result = helpers._check_command_response(result, self.connection.disconnect,
+                                                    msg, allowable_errors)
+                  
+                     callback(check_result)
+                 else:
+                     callback(result)
+                     
         else:       
             mod_callback = None
             

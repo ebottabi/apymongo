@@ -481,7 +481,10 @@ class Collection(object):
             spec_or_id = {"_id": spec_or_id}
             
         def mod_callback(resp):
-            if resp:
+        
+            if isinstance(resp,Exception):
+                callback(resp)
+            elif resp:
                 callback(resp[0])
             else:
                 callback(None)                 
