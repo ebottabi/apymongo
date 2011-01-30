@@ -463,10 +463,12 @@ class Cursor(object):
             assert self.__callback is not None, "callback must not be none"
             callback = self.__callback
             
-        self.__collection.database.command("distinct", callback = callback,
+        def mod_callback(resp):
+            callback(resp["values"])
+            
+        self.__collection.database.command("distinct", callback = mod_callback,
                                                   value = self.__collection.name,
-                                                  **options)["values"]
-
+                                                  **options)
 
 
 
