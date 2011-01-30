@@ -36,16 +36,20 @@ access:
 import datetime
 import os
 import select
+import struct
 import socket
 import threading
 import time
 import warnings
+import functools
 
-from pymongo import (database,
+import tornado.iostream
+
+from apymongo import (database,
                      helpers,
                      message)
-from pymongo.cursor_manager import CursorManager
-from pymongo.errors import (AutoReconnect,
+from apymongo.cursor_manager import CursorManager
+from apymongo.errors import (AutoReconnect,
                             ConfigurationError,
                             ConnectionFailure,
                             DuplicateKeyError,
@@ -165,7 +169,7 @@ class _Pool(threading.local):
     def __init__(self, stream_factory):
         self.pid = os.getpid()
         self.pool_size = 10
-        self.stream_factory = socket_factory
+        self.stream_factory = stream_factory
         if not hasattr(self, "streams"):
             self.streams = []
 
@@ -187,6 +191,7 @@ class _Pool(threading.local):
         try:
             self.stream = (pid, self.streams.pop())
         except IndexError:
+        
             def stream_callback(strm):
                 self.stream = (pid,strm)
                 callback(strm)
@@ -356,8 +361,10 @@ class Connection(object):  # TODO support auth for pooling
             self.__find_master()
 
         if username:
-            database = database or "admin"                
-            auth_err = lambda x : if not x: raise ConfigurationError("authentication failed")
+            database = database or "admin"  
+            def auth_err(x):
+                if not x: raise ConfigurationError("authentication failed")
+
             self[database].authenticate(username, password, auth_err)
             
 
@@ -511,7 +518,7 @@ class Connection(object):  # TODO support auth for pooling
         # additional hosts from a replSet:
         first = iter(self.__nodes).next()
 
-        callback = functools.partial(self.__callback_master,self)
+        callback = self.__callback_master
         self.__try_node(first,callback)
         
 
@@ -523,16 +530,16 @@ class Connection(object):  # TODO support auth for pooling
 
     def __callback_master(self,response):
            
-		primary = self.__add_hosts_and_get_primary(response)
-		self.end_request()
-		
-		if response["ismaster"]:
-			primary = True
+        primary = self.__add_hosts_and_get_primary(response)
+        self.end_request()
+        
+        if response["ismaster"]:
+            primary = True
  
         if (primary is True) or (self.__slave_okay and primary is not None):
-            return first
-        
-        raise AutoReconnect("could not find master/primary")
+            return 
+        else:        
+            raise AutoReconnect("could not find master/primary")
         
 
     def __add_hosts_and_get_primary(self, response):
@@ -551,9 +558,9 @@ class Connection(object):  # TODO support auth for pooling
         host, port = self.__host, self.__port
         
         try:
-			sock = socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-			sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-			stream = tornado.iostream.IOStream(sock,self.__io_loop)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            stream = tornado.iostream.IOStream(sock,self.__io_loop)
         except:
             self.disconnect()
             raise AutoReconnect("could not connect to %r" % list(self.__nodes))
@@ -577,13 +584,13 @@ class Connection(object):  # TODO support auth for pooling
         """
         
         def scallback(strm):
-			t = time.time()
-			if t - self.__last_checkout > 1 and stream._check_closed():
-			    self.disconnect()
-				self.__pool.get_stream(scallback)
-		    else:
-    			self.__last_checkout = t
-	    		callback(strm)
+            t = time.time()
+            if t - self.__last_checkout > 1 and strm._check_closed():
+                self.disconnect()
+                self.__pool.get_stream(scallback)
+            else:
+                self.__last_checkout = t
+                callback(strm)
   
         self.__pool.get_stream(scallback)
         
@@ -674,12 +681,12 @@ class Connection(object):  # TODO support auth for pooling
 
         
         def send_callback(strm): 
-			(request_id, data) = message
-			try:
-    			strm.write(data)
-    		except (ConnectionFailure,socket.error),e:
-    		    self.disconnect()
-    		    raise AutoReconnect(str(e)) 
+            (request_id, data) = message
+            try:
+                strm.write(data)
+            except (ConnectionFailure,socket.error),e:
+                self.disconnect()
+                raise AutoReconnect(str(e)) 
             else:
                 if with_last_error:
                     assert callback != None
@@ -690,8 +697,8 @@ class Connection(object):  # TODO support auth for pooling
                     self.__receive_message_on_stream(1,request_d,strm,callback=mod_callback)
                 elif callback:
                      callback(None)
-	
-		     
+    
+             
         self.__stream(send_callback)
         
 
@@ -709,25 +716,20 @@ class Connection(object):  # TODO support auth for pooling
     def __send_and_receive(self, message, callback,strm):
         """Send a message on the given socket and return the response data.
         """
-        (request_id, data) = message
+        (request_id, data) = message        
         strm.write(data)
         
-        self.__receive_message_on_stream(1, request_id, strm,callback)
+        self.__receive_message_on_stream(1, request_id, strm, callback)
         
 
 
-    def _send_message_with_response(self, message,callback):
-        """Send a message to Mongo and return the response.
-
-        Sends the given message and returns the response.
-
-        :Parameters:
-          - `message`: (request_id, data) pair making up the message to send
+    def _send_message_with_response(self, message, callback):
         """
-        
-        send_callback = functools.partial(self.__send_and_receive,self,message,callback)
-            
-        self.__stream(self,send_callback)
+        """
+           
+        send_callback = functools.partial(self.__send_and_receive,message,callback)
+                     
+        self.__stream(send_callback)
 
                                
 
@@ -759,7 +761,7 @@ class Connection(object):  # TODO support auth for pooling
         finished, as otherwise its :class:`~socket.socket` will not be
         reclaimed.
         """
-        self.__pool.return_socket()
+        self.__pool.return_stream()
 
     def __cmp__(self, other):
         if isinstance(other, Connection):

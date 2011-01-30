@@ -14,11 +14,13 @@
 
 """Cursor class to iterate over Mongo query results."""
 
+import functools
+
 from bson.code import Code
 from bson.son import SON
-from pymongo import (helpers,
+from apymongo import (helpers,
                      message)
-from pymongo.errors import (InvalidOperation,
+from apymongo.errors import (InvalidOperation,
                             AutoReconnect)
 
 _QUERY_OPTIONS = {
@@ -35,10 +37,22 @@ class Cursor(object):
     """A cursor / iterator over Mongo query results.
     """
 
-    def __init__(self, collection, spec=None, fields=None, skip=0, limit=0,
-                 timeout=True, snapshot=False, tailable=False, sort=None,
-                 max_scan=None, as_class=None,
-                 _must_use_master=False, _is_command=False,
+    def __init__(self, collection, 
+                 callback = None, 
+                 processor = None, 
+                 spec=None, 
+                 fields=None, 
+                 skip=0, 
+                 limit=0,
+                 timeout=True, 
+                 snapshot=False, 
+                 tailable=False, 
+                 sort=None,
+                 max_scan=None, 
+                 as_class=None,
+                 store = True,
+                 _must_use_master=False, 
+                 _is_command=False,
                  **kwargs):
         """Create a new cursor.
 
@@ -75,18 +89,15 @@ class Cursor(object):
             as_class = collection.database.connection.document_class
 
         self.__collection = collection
+        self.__callback = callback
+        self.__processor = processor
         self.__spec = spec
         self.__fields = fields
         self.__skip = skip
         self.__limit = limit
         self.__batch_size = 0
+        self.__store = store
 
-        # This is ugly. People want to be able to do cursor[5:5] and
-        # get an empty result set (old behavior was an
-        # exception). It's hard to do that right, though, because the
-        # server uses limit(0) to mean 'no limit'. So we set __empty
-        # in that case and check for it when iterating. We also unset
-        # it anytime we change __limit.
         self.__empty = False
 
         self.__timeout = timeout
@@ -102,6 +113,7 @@ class Cursor(object):
         self.__is_command = _is_command
 
         self.__data = []
+        self.__datastore = []
         self.__connection_id = None
         self.__retrieved = 0
         self.__killed = False
@@ -266,75 +278,6 @@ class Cursor(object):
         self.__skip = skip
         return self
 
-    def __getitem__(self, index):
-        """Get a single document or a slice of documents from this cursor.
-
-        Raises :class:`~pymongo.errors.InvalidOperation` if this
-        cursor has already been used.
-
-        To get a single document use an integral index, e.g.::
-
-          >>> db.test.find()[50]
-
-        An :class:`IndexError` will be raised if the index is negative
-        or greater than the amount of documents in this cursor. Any
-        limit applied to this cursor will be ignored.
-
-        To get a slice of documents use a slice index, e.g.::
-
-          >>> db.test.find()[20:25]
-
-        This will return this cursor with a limit of ``5`` and skip of
-        ``20`` applied.  Using a slice index will override any prior
-        limits or skips applied to this cursor (including those
-        applied through previous calls to this method). Raises
-        :class:`IndexError` when the slice has a step, a negative
-        start value, or a stop value less than or equal to the start
-        value.
-
-        :Parameters:
-          - `index`: An integer or slice index to be applied to this cursor
-        """
-        self.__check_okay_to_chain()
-        self.__empty = False
-        if isinstance(index, slice):
-            if index.step is not None:
-                raise IndexError("Cursor instances do not support slice steps")
-
-            skip = 0
-            if index.start is not None:
-                if index.start < 0:
-                    raise IndexError("Cursor instances do not support"
-                                     "negative indices")
-                skip = index.start
-
-            if index.stop is not None:
-                limit = index.stop - skip
-                if limit < 0:
-                    raise IndexError("stop index must be greater than start"
-                                     "index for slice %r" % index)
-                if limit == 0:
-                    self.__empty = True
-            else:
-                limit = 0
-
-            self.__skip = skip
-            self.__limit = limit
-            return self
-
-        if isinstance(index, (int, long)):
-            if index < 0:
-                raise IndexError("Cursor instances do not support negative"
-                                 "indices")
-            clone = self.clone()
-            clone.skip(index + self.__skip)
-            clone.limit(-1)  # use a hard limit
-            for doc in clone:
-                return doc
-            raise IndexError("no such item for Cursor instance")
-        raise TypeError("index %r cannot be applied to Cursor "
-                        "instances" % index)
-
     def max_scan(self, max_scan):
         """Limit the number of documents to scan when performing the query.
 
@@ -375,82 +318,6 @@ class Cursor(object):
         keys = helpers._index_list(key_or_list, direction)
         self.__ordering = helpers._index_document(keys)
         return self
-
-    def count(self, with_limit_and_skip=False):
-        """Get the size of the results set for this query.
-
-        Returns the number of documents in the results set for this query. Does
-        not take :meth:`limit` and :meth:`skip` into account by default - set
-        `with_limit_and_skip` to ``True`` if that is the desired behavior.
-        Raises :class:`~pymongo.errors.OperationFailure` on a database error.
-
-        :Parameters:
-          - `with_limit_and_skip` (optional): take any :meth:`limit` or
-            :meth:`skip` that has been applied to this cursor into account when
-            getting the count
-
-        .. note:: The `with_limit_and_skip` parameter requires server
-           version **>= 1.1.4-**
-
-        .. versionadded:: 1.1.1
-           The `with_limit_and_skip` parameter.
-           :meth:`~pymongo.cursor.Cursor.__len__` was deprecated in favor of
-           calling :meth:`count` with `with_limit_and_skip` set to ``True``.
-        """
-        command = {"query": self.__spec, "fields": self.__fields}
-
-        if with_limit_and_skip:
-            if self.__limit:
-                command["limit"] = self.__limit
-            if self.__skip:
-                command["skip"] = self.__skip
-
-        r = self.__collection.database.command("count", self.__collection.name,
-                                               allowable_errors=["ns missing"],
-                                               **command)
-        if r.get("errmsg", "") == "ns missing":
-            return 0
-        return int(r["n"])
-
-    def distinct(self, key):
-        """Get a list of distinct values for `key` among all documents
-        in the result set of this query.
-
-        Raises :class:`TypeError` if `key` is not an instance of
-        :class:`basestring`.
-
-        :Parameters:
-          - `key`: name of key for which we want to get the distinct values
-
-        .. note:: Requires server version **>= 1.1.3+**
-
-        .. seealso:: :meth:`pymongo.collection.Collection.distinct`
-
-        .. versionadded:: 1.2
-        """
-        if not isinstance(key, basestring):
-            raise TypeError("key must be an instance of basestring")
-
-        options = {"key": key}
-        if self.__spec:
-            options["query"] = self.__spec
-
-        return self.__collection.database.command("distinct",
-                                                  self.__collection.name,
-                                                  **options)["values"]
-
-    def explain(self):
-        """Returns an explain plan record for this cursor.
-
-        .. mongodoc:: explain
-        """
-        c = self.clone()
-        c.__explain = True
-
-        # always use a hard limit for explains
-        if c.__limit:
-            c.__limit = -abs(c.__limit)
-        return c.next()
 
     def hint(self, index):
         """Adds a 'hint', telling Mongo the proper index to use for the query.
@@ -508,76 +375,7 @@ class Cursor(object):
         self.__spec["$where"] = code
         return self
 
-    def __send_message(self, message):
-        """Send a query or getmore message and handles the response.
-        """
-        db = self.__collection.database
-        kwargs = {"_must_use_master": self.__must_use_master}
-        if self.__connection_id is not None:
-            kwargs["_connection_to_use"] = self.__connection_id
-        kwargs.update(self.__kwargs)
-
-        response = db.connection._send_message_with_response(message,
-                                                             **kwargs)
-
-        if isinstance(response, tuple):
-            (connection_id, response) = response
-        else:
-            connection_id = None
-
-        self.__connection_id = connection_id
-
-        try:
-            response = helpers._unpack_response(response, self.__id,
-                                                self.__as_class,
-                                                self.__tz_aware)
-        except AutoReconnect:
-            db.connection.disconnect()
-            raise
-        self.__id = response["cursor_id"]
-
-        # starting from doesn't get set on getmore's for tailable cursors
-        if not self.__tailable:
-            assert response["starting_from"] == self.__retrieved
-
-        self.__retrieved += response["number_returned"]
-        self.__data = response["data"]
-
-        if self.__limit and self.__id and self.__limit <= self.__retrieved:
-            self.__die()
-
-    def _refresh(self):
-        """Refreshes the cursor with more data from Mongo.
-
-        Returns the length of self.__data after refresh. Will exit early if
-        self.__data is already non-empty. Raises OperationFailure when the
-        cursor cannot be refreshed due to an error on the query.
-        """
-        if len(self.__data) or self.__killed:
-            return len(self.__data)
-
-        if self.__id is None:  # Query
-            self.__send_message(
-                message.query(self.__query_options(),
-                              self.__collection.full_name,
-                              self.__skip, self.__limit,
-                              self.__query_spec(), self.__fields))
-            if not self.__id:
-                self.__killed = True
-        elif self.__id:  # Get More
-            if self.__limit:
-                limit = self.__limit - self.__retrieved
-                if self.__batch_size:
-                    limit = min(limit, self.__batch_size)
-            else:
-                limit = self.__batch_size
-
-            self.__send_message(
-                message.get_more(self.__collection.full_name,
-                                 limit, self.__id))
-
-        return len(self.__data)
-
+ 
     @property
     def alive(self):
         """Does this cursor have the potential to return more data?
@@ -590,16 +388,192 @@ class Cursor(object):
         .. versionadded:: 1.5
         """
         return bool(len(self.__data) or (not self.__killed))
+               
+    def count(self, callback = None, with_limit_and_skip=False):
+        """Get the size of the results set for this query.
 
-    def __iter__(self):
-        return self
+        Returns the number of documents in the results set for this query. Does
+        not take :meth:`limit` and :meth:`skip` into account by default - set
+        `with_limit_and_skip` to ``True`` if that is the desired behavior.
+        Raises :class:`~pymongo.errors.OperationFailure` on a database error.
 
-    def next(self):
-        if self.__empty:
-            raise StopIteration
-        db = self.__collection.database
-        if len(self.__data) or self._refresh():
-            next = db._fix_outgoing(self.__data.pop(0), self.__collection)
+        :Parameters:
+          - `with_limit_and_skip` (optional): take any :meth:`limit` or
+            :meth:`skip` that has been applied to this cursor into account when
+            getting the count
+
+        .. note:: The `with_limit_and_skip` parameter requires server
+           version **>= 1.1.4-**
+
+        .. versionadded:: 1.1.1
+           The `with_limit_and_skip` parameter.
+           :meth:`~pymongo.cursor.Cursor.__len__` was deprecated in favor of
+           calling :meth:`count` with `with_limit_and_skip` set to ``True``.
+        """
+        command = {"query": self.__spec, "fields": self.__fields}
+        
+        if callback is None:
+            assert self.__callback is not None, "callback must not be none"
+            callback = self.__callback
+            
+
+        if with_limit_and_skip:
+            if self.__limit:
+                command["limit"] = self.__limit
+            if self.__skip:
+                command["skip"] = self.__skip
+
+
+        def mod_callback(r):
+            if r.get("errmsg", "") == "ns missing":
+                callback(0)
+            else:
+                callback( int(r["n"]) )
+            
+        
+        self.__collection.database.command("count", callback = mod_callback, value = self.__collection.name,
+                                               allowable_errors=["ns missing"],
+                                               **command)
+
+
+    def distinct(self, key,callback=None):
+        """Get a list of distinct values for `key` among all documents
+        in the result set of this query.
+
+        Raises :class:`TypeError` if `key` is not an instance of
+        :class:`basestring`.
+
+        :Parameters:
+          - `key`: name of key for which we want to get the distinct values
+
+        .. note:: Requires server version **>= 1.1.3+**
+
+        .. seealso:: :meth:`pymongo.collection.Collection.distinct`
+
+        .. versionadded:: 1.2
+        """
+        if not isinstance(key, basestring):
+            raise TypeError("key must be an instance of basestring")
+
+        options = {"key": key}
+        if self.__spec:
+            options["query"] = self.__spec
+
+        if callback is None:
+            assert self.__callback is not None, "callback must not be none"
+            callback = self.__callback
+            
+        self.__collection.database.command("distinct", callback = callback,
+                                                  value = self.__collection.name,
+                                                  **options)["values"]
+
+
+
+
+    def loop(self):
+        
+        if len(self.__data):
+            
+            collection = self.__collection
+            db = collection.database
+            processor = self.__processor
+            
+            for r in self.__data:
+
+                r = db._fix_outgoing(r, collection)
+               
+                if processor:
+                    r = processor(r,collection)
+                    
+                if self.__store and r:
+                    self.__datastore.append(r)
+                    
+            
+            self.__data = []
+                
+                
+        if not self.__killed:
+            self._refresh()
+            
         else:
-            raise StopIteration
-        return next
+            
+            self.__callback(self.__datastore)
+        
+        
+
+    def _refresh(self):
+        """Refreshes the cursor with more data from Mongo.
+
+        Returns the length of self.__data after refresh. Will exit early if
+        self.__data is already non-empty. Raises OperationFailure when the
+        cursor cannot be refreshed due to an error on the query.
+        """
+
+        callback = self.loop
+        
+        
+        if self.__id is None: 
+            self.__send_message(
+                message.query(self.__query_options(),
+                              self.__collection.full_name,
+                              self.__skip, self.__limit,
+                              self.__query_spec(), self.__fields),callback)
+
+        elif self.__id:  # Get More
+            if self.__limit:
+                limit = self.__limit - self.__retrieved
+                if self.__batch_size:
+                    limit = min(limit, self.__batch_size)
+            else:
+                limit = self.__batch_size
+
+            self.__send_message(
+                message.get_more(self.__collection.full_name,
+                                 limit, self.__id),callback)
+
+
+
+    def __send_message(self, message,callback):
+        """Send a query or getmore message and handles the response.
+        """
+        db = self.__collection.database
+
+        def mod_callback(response):
+            if isinstance(response, tuple):
+                (connection_id, response) = response
+            else:
+                connection_id = None
+    
+            self.__connection_id = connection_id
+    
+            try:
+                response = helpers._unpack_response(response, self.__id,
+                                                    self.__as_class,
+                                                    self.__tz_aware)
+            except AutoReconnect:
+                db.connection.disconnect()
+                raise
+                
+            self.__id = response["cursor_id"]
+             
+            # starting from doesn't get set on getmore's for tailable cursors
+            if not self.__tailable:
+                assert response["starting_from"] == self.__retrieved
+    
+            self.__retrieved += response["number_returned"]
+            self.__data = response["data"]
+    
+            die_now = (self.__id == 0) or (len(self.__data) == 0) or (self.__limit and self.__id and self.__limit <= self.__retrieved)
+    
+            if die_now:
+                self.__die()
+                            
+            
+            callback()
+
+
+        db.connection._send_message_with_response(message,mod_callback)
+
+
+
+

@@ -28,11 +28,11 @@ import struct
 import bson
 from bson.son import SON
 try:
-    from pymongo import _cbson
+    from apymongo import _cbson
     _use_c = True
 except ImportError:
     _use_c = False
-from pymongo.errors import InvalidOperation
+from apymongo.errors import InvalidOperation
 
 
 __ZERO = "\x00\x00\x00\x00"

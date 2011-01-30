@@ -15,16 +15,17 @@
 """Database level operations."""
 
 import warnings
+import functools
 
 from bson.code import Code
 from bson.dbref import DBRef
 from bson.son import SON
-from pymongo import helpers
-from pymongo.collection import Collection
-from pymongo.errors import (CollectionInvalid,
+from apymongo import helpers
+from apymongo.collection import Collection
+from apymongo.errors import (CollectionInvalid,
                             InvalidName,
                             OperationFailure)
-from pymongo.son_manipulator import ObjectIdInjector
+from apymongo.son_manipulator import ObjectIdInjector
 
 
 def _check_name(name):
@@ -284,17 +285,17 @@ class Database(object):
         command.update(kwargs)
 
         if callback:
-			def mod_callback(result):
-				 if check:
-					 msg = "command %r failed: %%s" % command
-					 check_result = helpers._check_command_response(result, self.connection.disconnect,
-												msg, allowable_errors)
-			  
-				 callback(check_result)
-	    else:		
-			mod_callback = None
-			
-        self["$cmd"].find_one(command,callback=mod_callback,
+            def mod_callback(result):
+                 if check:
+                     msg = "command %r failed: %%s" % command
+                     check_result = helpers._check_command_response(result, self.connection.disconnect,
+                                                msg, allowable_errors)
+              
+                 callback(check_result)
+        else:       
+            mod_callback = None
+            
+        self["$cmd"].find_one(spec_or_id = command,callback=mod_callback,
                                        _must_use_master=True,
                                        _is_command=True)
 
@@ -306,13 +307,13 @@ class Database(object):
    
         def mod_callback(results):
 
-			names = [r["name"] for r in results]
-			names = [n[len(self.__name) + 1:] for n in names
-					 if n.startswith(self.__name + ".")]
-			names = [n for n in names if "$" not in n]
-			callback(names)      
+            names = [r["name"] for r in results]
+            names = [n[len(self.__name) + 1:] for n in names
+                     if n.startswith(self.__name + ".")]
+            names = [n for n in names if "$" not in n]
+            callback(names)      
         
-        self["system.namespaces"].find(callback=mod_callback,_must_use_master=True)
+        self["system.namespaces"].find(callback=mod_callback,_must_use_master=True).loop()
 
 
     def drop_collection(self, name_or_collection):
@@ -399,7 +400,7 @@ class Database(object):
         """
         
         
-        self["system.profile"].find(callback=callback)
+        self["system.profile"].find(callback=callback).loop()
         
 
     def error(self,callback):
@@ -439,9 +440,9 @@ class Database(object):
         """
         
         def mod_callback(error):
-			if error.get("err", 0) is None:
-				error = None
-			callback(error)          
+            if error.get("err", 0) is None:
+                error = None
+            callback(error)          
         
         self.command("getpreverror",callback=mod_callback)
 
@@ -546,19 +547,13 @@ class Database(object):
             callback(result)
 
 
-        def mod_callback(result)
-			nonce = result["nonce"]
-			
-			key = helpers._auth_key(nonce, name, password)
-			
-			self.command("authenticate",callback = mod_callback2, user=unicode(name),
-							 nonce=nonce, key=key)
-							 
-			try:
-				self.command("authenticate", 
-				return True
-			except OperationFailure:
-				return False
+        def mod_callback(result):
+            nonce = result["nonce"]
+            
+            key = helpers._auth_key(nonce, name, password)
+            
+            self.command("authenticate",callback = mod_callback2, user=unicode(name),
+                             nonce=nonce, key=key)
             
 
         self.command("getnonce",callback=mod_callback)        
@@ -619,7 +614,7 @@ class Database(object):
         if not isinstance(code, Code):
             code = Code(code)
             
-        def mod_callback(result)
+        def mod_callback(result):
             callback(result.get("retval", None))
 
         self.command("$eval", callback = mod_callback, value = code, args=args)

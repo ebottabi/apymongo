@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Python driver for MongoDB."""
+"""Asynchronous Python driver for MongoDB."""
 
-from pymongo.connection import Connection as PyMongo_Connection
+from apymongo.connection import Connection as APyMongo_Connection
 
 ASCENDING = 1
 """Ascending sort order."""
@@ -39,11 +39,11 @@ ALL = 2
 """Profile all operations."""
 
 # Remember to change in setup.py as well!
-version = "1.9+"
+version = "0.0.1"
 """Current version of PyMongo."""
 
-Connection = PyMongo_Connection
-"""Alias for :class:`pymongo.connection.Connection`."""
+Connection = APyMongo_Connection
+"""Alias for :class:`apymongo.connection.Connection`."""
 
 
 def has_c():

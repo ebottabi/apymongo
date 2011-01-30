@@ -15,13 +15,14 @@
 """Collection level utilities for Mongo."""
 
 import warnings
+import functools
 
 from bson.code import Code
 from bson.son import SON
-from pymongo import (helpers,
+from apymongo import (helpers,
                      message)
-from pymongo.cursor import Cursor
-from pymongo.errors import InvalidName
+from apymongo.cursor import Cursor
+from apymongo.errors import InvalidName
 
 _ZERO = "\x00\x00\x00\x00"
 
@@ -274,11 +275,11 @@ class Collection(object):
             safe = True
             
         if callback:
-			def mod_callback(result):
-				ids = [doc.get("_id", None) for doc in docs]
-				callback(return_one and ids[0] or ids)
-		else:
-		    mod_callback = None
+            def mod_callback(result):
+                ids = [doc.get("_id", None) for doc in docs]
+                callback(return_one and ids[0] or ids)
+        else:
+            mod_callback = None
                
         self.__database.connection._send_message(
             message.insert(self.__full_name, docs,
@@ -286,7 +287,7 @@ class Collection(object):
 
 
     def update(self, spec, document, upsert=False, manipulate=False,
-               safe=False, multi=False,callback=callback, **kwargs):
+               safe=False, multi=False,callback=None, **kwargs):
         """Update a document(s) in this collection.
 
         Raises :class:`TypeError` if either `spec` or `document` is
@@ -448,7 +449,7 @@ class Collection(object):
         self.__database.connection._send_message(
             message.delete(self.__full_name, spec_or_id, safe, kwargs), with_last_error=safe,callback=callback)
 
-    def find_one(self, callback=None, spec_or_id=None, *args, **kwargs):
+    def find_one(self, spec_or_id = None, callback=None,  *args, **kwargs):
         """Get a single document from the database.
 
         All arguments to :meth:`find` are also valid arguments for
@@ -485,7 +486,7 @@ class Collection(object):
             else:
                 callback(None)                 
         
-        self.find(spec_or_id, callback = mod_callback, *args, **kwargs).limit(-1)
+        self.find(spec=spec_or_id, callback = mod_callback, *args, **kwargs).limit(-1).loop()
         
         
     def find(self, *args, **kwargs):
@@ -567,19 +568,19 @@ class Collection(object):
 
         .. mongodoc:: find
         """
-        Cursor(self, *args, **kwargs)
+        return Cursor(self, *args, **kwargs)
 
 
-    def count(self):
+    def count(self,callback):
         """Get the number of documents in this collection.
 
         To get the number of documents matching a specific query use
         :meth:`pymongo.cursor.Cursor.count`.
         """
-        return self.find().count()
+        return self.find(callback=callback).count()
         
         
-    def distinct(self, key):
+    def distinct(self, key, callback):
         """Get a list of distinct values for `key` among all documents
         in this collection.
 
@@ -596,7 +597,7 @@ class Collection(object):
 
         .. versionadded:: 1.1.1
         """
-        return self.find().distinct(key)
+        return self.find(callback=callback).distinct(key)
         
         
 
@@ -679,15 +680,15 @@ class Collection(object):
         def mod_callback(resp):
             
             if not isinstance(resp,Exception):
-				self.__database.connection._cache_index(self.__database.name,
-													self.__name, name, ttl)
-			    if callback:
-			        callback(name)
-			else:
-			    if callback:
-			        callback(resp)
-			    else:
-			        raise resp
+                self.__database.connection._cache_index(self.__database.name,
+                                                    self.__name, name, ttl)
+                if callback:
+                    callback(name)
+            else:
+                if callback:
+                    callback(resp)
+                else:
+                    raise resp
                 
 
         self.__database.system.indexes.insert(index, manipulate=False,
@@ -839,16 +840,17 @@ class Collection(object):
         """
         
         def mod_callback(raw):
-			info = {}
-			for index in raw:
-				index["key"] = index["key"].items()
-				index = dict(index)
-				info[index.pop("name")] = index
-			callback( info )
+            info = {}
+            for index in raw:
+                index["key"] = index["key"].items()
+                index = dict(index)
+                info[index.pop("name")] = index
+            callback( info )
         
         self.__database.system.indexes.find(spec={"ns": self.__full_name},
                                             fields={"ns": 0}, 
-                                            callback = mod_callback, as_class=SON)
+                                            callback = mod_callback, 
+                                            as_class=SON).loop()
 
 
     def options(self,callback):
@@ -861,14 +863,14 @@ class Collection(object):
         """
         
         def mod_callback(result):
-			if not result:
-				callback({})
-	
-			options = result.get("options", {})
-			if "create" in options:
-				del options["create"]
-	
-			callback( options )
+            if not result:
+                callback({})
+    
+            options = result.get("options", {})
+            if "create" in options:
+                del options["create"]
+    
+            callback( options )
         
         self.__database.system.namespaces.find_one(
             {"name": self.__full_name},callback=mod_callback)
@@ -877,7 +879,7 @@ class Collection(object):
 
     # TODO key and condition ought to be optional, but deprecation
     # could be painful as argument order would have to change.
-    def group(self, callback, key, condition, initial, reduce, finalize=None,
+    def group(self, key, condition, initial, reduce, callback, finalize=None,
               command=True):
         """Perform a query similar to an SQL *group by* operation.
 
@@ -1056,11 +1058,11 @@ class Collection(object):
 
         def mod_callback(out):
             if not out['ok']:
-				if out["errmsg"] == no_obj_error:
-					callback(None)
-				else:
-					# Should never get here b/c of allowable_errors
-					callback( ValueError("Unexpected Error: %s"%out) )
+                if out["errmsg"] == no_obj_error:
+                    callback(None)
+                else:
+                    # Should never get here b/c of allowable_errors
+                    callback( ValueError("Unexpected Error: %s"%out) )
 
             callback( out['value'] )
         

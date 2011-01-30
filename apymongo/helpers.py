@@ -24,8 +24,8 @@ import struct
 
 import bson
 from bson.son import SON
-import pymongo
-from pymongo.errors import (AutoReconnect,
+import apymongo
+from apymongo.errors import (AutoReconnect,
                             OperationFailure,
                             TimeoutError)
 
