@@ -1,86 +1,53 @@
 =======
-PyMongo
+APyMongo
 =======
-:Info: See `the mongo site <http://www.mongodb.org>`_ for more information. See `github <http://github.com/mongodb/mongo-python-driver/tree>`_ for the latest source.
-:Author: Mike Dirolf <mike@10gen.com>
+:Info: A tornado-based asynchronous version of the pymongo driver for MongoDB.
+:Author: Dan Yamins <dyamins@gmail.com>
 
 About
 =====
 
-The PyMongo distribution contains tools for interacting with MongoDB
-database from Python.  The ``bson`` package is an implementation of
-the `BSON format <http://bsonspec.org>`_ for Python. The ``pymongo``
-package is a native Python driver for MongoDB. The ``gridfs`` package
-is a `gridfs
-<http://www.mongodb.org/display/DOCS/GridFS+Specification>`_
-implementation on top of ``pymongo``.
+APyMongo is an asynchronous version of `the PyMongo driver for MongoDB <http://api.mongodb.org/python>`_.
+APyMongo uses the `tornado iostream eventloop <https://github.com/facebook/tornado/blob/master/tornado/iostream.py>`_ 
+to drive asychronous requests.  A primary use of APyMongo is to serve MongoDB-backed websites in an efficient asynchronous manner
+via the `tornado web server <http://www.tornadoweb.org/>`_, but it can be used wherever one wants to drive multiple efficient 
+highthrouput read-write connections to a MongoDB instance.   
 
-Issues / Questions / Feedback
-=============================
-
-Any issues with, questions about, or feedback for PyMongo should be
-sent to the mongodb-user list on Google Groups. For confirmed issues
-or feature requests, open a case on `jira
-<http://jira.mongodb.org>`_. Please do not e-mail any of the PyMongo
-developers directly with issues or questions - you're more likely to
-get an answer on the list.
 
 Installation
 ============
 
-If you have `setuptools
-<http://peak.telecommunity.com/DevCenter/setuptools>`_ installed you
-should be able to do **easy_install pymongo** to install
-PyMongo. Otherwise you can download the project source and do **python
-setup.py install** to install.
+For now, the project is just a github repo (https://github.com/yamins81/apymongo).  
+The install process is: 
+
+- install mongodb
+- pull the apymongo repo, and 
+- go to directory where you pulled the repo and do the usual "python setup.py install" command. 
+
 
 Dependencies
 ============
 
-The PyMongo distribution is supported and tested on Python 2.x, where
-x >= 4. PyMongo versions <= 1.3 also supported Python 2.3, but that is
-no longer supported. If you need to use Python 2.3 please contact us.
+Mongo:  APyMongo requires MongoDB distributions that PyMongo works on. 
+
+Python:  APyMongo requires Python >=2.4.    
+
+Tornado:  IMPORTANT!!! You MUST must be using the a recent pull from the Tornado repository to  
+run APyMongo.   APyMongo depends on a recent addition to the tornado.iostream module that is NOT
+present in the current release. 
 
 Additional dependencies are:
 
+- (to handle object serialization) bson 
 - (to generate documentation) sphinx_
 - (to auto-discover tests) `nose <http://somethingaboutorange.com/mrl/projects/nose/>`_
 
+
 Examples
 ========
-Here's a basic example (for more see the *examples* section of the docs):
+Here's a basic example (for more see the *examples* section of the docs).
 
->>> import pymongo
->>> connection = pymongo.Connection("localhost", 27017)
->>> db = connection.test
->>> db.name()
-u'test'
->>> db.my_collection
-Collection(Database(Connection('localhost', 27017), u'test'), u'my_collection')
->>> db.my_collection.save({"x": 10})
-ObjectId('4aba15ebe23f6b53b0000000')
->>> db.my_collection.save({"x": 8})
-ObjectId('4aba160ee23f6b543e000000')
->>> db.my_collection.save({"x": 11})
-ObjectId('4aba160ee23f6b543e000002')
->>> db.my_collection.find_one()
-{u'x': 10, u'_id': ObjectId('4aba15ebe23f6b53b0000000')}
->>> for item in db.my_collection.find():
-...     print item["x"]
-...
-10
-8
-11
->>> db.my_collection.create_index("x")
-u'x_1'
->>> for item in db.my_collection.find().sort("x", pymongo.ASCENDING):
-...     print item["x"]
-...
-8
-10
-11
->>> [item["x"] for item in db.my_collection.find().limit(2).skip(1)]
-[8, 11]
+
 
 Documentation
 =============
