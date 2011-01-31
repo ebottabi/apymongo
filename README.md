@@ -7,17 +7,17 @@ APyMongo
 About
 =====
 
-APyMongo is an asynchronous version of `the PyMongo driver for MongoDB <http://api.mongodb.org/python>`_.
-APyMongo uses the `tornado iostream eventloop <https://github.com/facebook/tornado/blob/master/tornado/iostream.py>`_ 
+APyMongo is an asynchronous version of [the PyMongo driver for MongoDB](http://api.mongodb.org/python).
+APyMongo uses the [tornado iostream eventloop](github.com/facebook/tornado/blob/master/tornado/iostream.py) 
 to drive asychronous requests.  A primary use of APyMongo is to serve MongoDB-backed websites in an efficient asynchronous manner
-via the `tornado web server <http://www.tornadoweb.org/>`_, but it can be used wherever one wants to drive multiple efficient 
+via the [tornado web server](www.tornadoweb.org), but it can be used wherever one wants to drive multiple efficient 
 highthrouput read-write connections to a MongoDB instance.   
 
 
 Installation
 ============
 
-For now, the project is just a github repo (https://github.com/yamins81/apymongo).  
+For now, the project is just a github repo ([https://github.com/yamins81/apymongo]).  
 The install process is: 
 
 1) install mongodb
@@ -38,37 +38,33 @@ present in the current release.
 
 Additional dependencies are:
 
-- (to generate documentation) sphinx_
-- (to auto-discover tests) `nose <http://somethingaboutorange.com/mrl/projects/nose/>`_
+- (to generate documentation) [sphinx](http://sphinx.pocoo.org/)
+- (to auto-discover tests) [nose](http://somethingaboutorange.com/mrl/projects/nose/).
 
 
 Examples
 ========
-Here's a basic example (for more see the *examples* section of the docs).
+Here's a basic example that can be used in a Tornado web server:
 
 	import json
-	
-	import tornado.web	
+	import tornado.web
 	
 	import apymongo 
-	
 	from apymongo import json_util
 		
 	class TestHandler(tornado.web.RequestHandler):
 	
 		@tornado.web.asynchronous
-		
 		def get(self):     
-			connection = apymongo.Connection()
-			
+			connection = apymongo.Connection()		
 			collection = conn['testdb']['testcollection']
-			
 			coll.find_one(callback=self.handle)
 			
 		def handle(self,response):
 			self.write(json.dumps(response,default=json_util.default))
-			
 			self.finish()
+
+For more see the *examples* section of the docs
 
 
 Documentation
