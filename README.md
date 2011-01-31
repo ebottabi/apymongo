@@ -28,7 +28,7 @@ The install process is:
 Dependencies
 ============
 
-Mongo:  APyMongo requires MongoDB distributions that PyMongo works on. 
+Mongo:  APyMongo works for the same MongoDB distributions that PyMongo works on. 
 
 Python:  APyMongo requires Python >=2.4.    
 
