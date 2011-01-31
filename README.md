@@ -1,9 +1,9 @@
 =======
 APyMongo
 =======
-**Info** A tornado-based asynchronous version of the pymongo driver for MongoDB.
+**Info:** A tornado-based asynchronous version of the pymongo driver for MongoDB.
 
-**Author** Dan Yamins <dyamins@gmail.com>
+**Author:** Dan Yamins <dyamins@gmail.com>
 
 About
 =====
@@ -18,12 +18,13 @@ highthrouput read-write connections to a MongoDB instance.
 Installation
 ============
 
-For now, the project is just a github repo ([https://github.com/yamins81/apymongo]).  
+For now, the project is just a github repo (https://github.com/yamins81/apymongo].
+
 The install process is: 
 
-1. install mongodb
-2. pull the apymongo repo, and 
-3. go to directory where you pulled the repo and do the usual "python setup.py install" command. 
+1. install mongodb if you havent already
+2. pull the apymongo repo
+3. run "python setup.py install" in the apymongo directory.
 
 
 Dependencies
@@ -127,3 +128,13 @@ APymongo currently does not handle:
 - master-slave connections
 - DBRefs. 
 - the *explain* method
+
+
+Relationship to **asyncmongo**
+=============================
+
+APyMongo was originally developed for the GovData project (https://github.com/yamins81/govdata-core), where a 
+version of it is buried deep in the govdata code.   While APyMongo was being modularized 
+for separate relase, I learn of [asyncmongo](https://github.com/bitly/asyncmongo), 
+an existing asynchronous python-language MongoDB driver that also uses the tornado iostream.   
+Because asyncmongo has a somewhat different API, I decided to release a separate project. 
