@@ -90,7 +90,7 @@ now has a *callback* argument, a single-argument executable to which tornado wil
 pass the contents of the response when it is ready to be read.  In other words, 
 you can no longer do e.g.:
 
-	r = collection.find_one()
+    r = collection.find_one()
 	
 but must instead do e.g.:
 
@@ -136,5 +136,6 @@ Relationship to **asyncmongo**
 APyMongo was originally developed for the GovData project (https://github.com/yamins81/govdata-core), where a 
 version of it is buried deep in the govdata code.   While APyMongo was being modularized 
 for separate relase, I learn of [asyncmongo](https://github.com/bitly/asyncmongo), 
-an existing asynchronous python-language MongoDB driver that also uses the tornado iostream.   
-Because asyncmongo has a somewhat different API, I decided to release a separate project. 
+an existing asynchronous python-language MongoDB driver that also uses the tornado iostream. 
+
+Because asyncmongo has a somewhat different API, I decided to release APyMongo as a separate project. 
