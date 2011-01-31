@@ -1,4 +1,3 @@
-=======
 APyMongo
 =======
 **Info:** A tornado-based asynchronous version of the pymongo driver for MongoDB.
