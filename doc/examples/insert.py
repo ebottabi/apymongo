@@ -7,7 +7,10 @@ from apymongo import json_util
 
 import base
 
-class TestHandler(tornado.web.RequestHandler):
+class InsertHandler(tornado.web.RequestHandler):
+    """
+       Inserts a test record, and shows a record count.
+    """
 
     
     @tornado.web.asynchronous
@@ -15,7 +18,7 @@ class TestHandler(tornado.web.RequestHandler):
     
         self.connection = apymongo.Connection()
         
-        coll = self.connection['testdb']['__ASYNCTEST3__']
+        coll = self.connection['testdb']['testcollection']
         to_insert = {"testkey1":22,
                      "testkey2":[2,3], 
                      "testkey3":{"inner1":2,
@@ -41,7 +44,7 @@ class TestHandler(tornado.web.RequestHandler):
         self.finish()
 
 if __name__ == "__main__":
-    base.main(TestHandler)
+    base.main(InsertHandler)
   
   
           

@@ -8,7 +8,11 @@ from apymongo import json_util
 import base
 
 
-class TestHandler(tornado.web.RequestHandler):
+class StreamHandler(tornado.web.RequestHandler):
+    """
+        Streams the results of "find". 
+    """
+
 
     @tornado.web.asynchronous
     def get(self):     
@@ -17,8 +21,8 @@ class TestHandler(tornado.web.RequestHandler):
         self.write('[')
         
         conn = apymongo.Connection()
-        coll = conn['testdb']['__ASYNCTEST__']
-        cursor = coll.find(callback=self.handle,processor = self.process).limit(1000)       
+        coll = conn['testdb']['testcollection']
+        cursor = coll.find(callback=self.handle,processor = self.stream_processor)      
         cursor.loop()
         
 
@@ -27,7 +31,7 @@ class TestHandler(tornado.web.RequestHandler):
         self.finish()
                
                
-    def process(self,r,collection):
+    def stream_processor(self,r,collection):
     
 		self.write((',' if self.writing else '') + json.dumps(r,default=json_util.default))
 		self.flush()
@@ -35,9 +39,8 @@ class TestHandler(tornado.web.RequestHandler):
 			self.writing = True
 			
 	    
-
 if __name__ == "__main__":
-    base.main(TestHandler)
+    base.main(StreamHandler)
 
   
   

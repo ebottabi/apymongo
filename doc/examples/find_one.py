@@ -8,12 +8,15 @@ from apymongo import json_util
 import base
 
 
-class TestHandler(tornado.web.RequestHandler):
+class FindOneHandler(tornado.web.RequestHandler):
+    """
+       finds a single record
+    """
 
     @tornado.web.asynchronous
     def get(self):     
         conn = apymongo.Connection()
-        coll = conn['testdb']['__ASYNCTEST__']
+        coll = conn['testdb']['testcollection']
         coll.find_one(callback=self.handle)
         
 
@@ -23,7 +26,7 @@ class TestHandler(tornado.web.RequestHandler):
                
 
 if __name__ == "__main__":
-    base.main(TestHandler)
+    base.main(FindOneHandler)
 
   
   

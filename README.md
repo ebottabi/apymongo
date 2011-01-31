@@ -65,16 +65,16 @@ Here's a basic example that can be used in a Tornado web server:
 			self.write(json.dumps(response,default=json_util.default))
 			self.finish()
 
-For more see the **examples** section of the docs.  To use a given example:
+For more information, see the **examples** section of the docs.  To use a given example:
 
-0. Make sure you have installed mongo and apymongo (and tornado), and that 
+1. Make sure you have installed mongo and apymongo (and tornado), and that 
 a MongoDB instance is running on localhost:27017 (the default).
 
-1. cd /path/to/apymongo/doc/examples
+2. cd /path/to/apymongo/doc/examples
 
-2. python [desired_example_file.py]
+3. python [desired_example_file.py]
 
-3. Open a web broweser and point it to localhost:8000
+4. Open a web broweser and point it to localhost:8000
 
 
 
@@ -84,13 +84,25 @@ Documentation
 Currently, there is no separate documentation for this project. Essentially, 
 APyMongo's API is identical to pymongo's except for the following:
 
-- **callbacks**:  Every pymongo method that actually hits the database for a response
-(i.e. sends a message to the mongo server and expects a return message) 
-now has a *callback* argument, a single-argument executable to which Tornado will
-pass the contents of the returned message when it is ready to be read. 
+- Every pymongo method that actually hits the database for a response
+now has a *callback* argument, a single-argument executable to which tornado will
+pass the contents of the response when it is ready to be read.  In other words, 
+you can no longer do e.g.:
+
+	r = collection.find_one()
+	
+but must instead do e.g.:
+
+    def callback(r):
+        #handle response ... 
+
+    collection.find_one(callback)
+    
+This goes for **ALL** methods that hit the database, including even such ``simple" things as 
+connection.database_names.
 
 - Cursors have no *next* method.  Instead, to obtain the equivalent of ``list(cursor.find())",
-use the **loop**.
+use the *apymongo.cursor.loop* method.
 
 - The Connection method has a *io_loop* argument, to which you can pass an existing 
 tornado.io_loop object for the streams to attach to.
@@ -99,8 +111,7 @@ tornado.io_loop object for the streams to attach to.
 Testing
 =======
 
-The easiest way to run the tests is to install `nose
-<http://somethingaboutorange.com/mrl/projects/nose/>`_ (**easy_install
+The easiest way to run the tests is to install [nose](http://somethingaboutorange.com/mrl/projects/nose/>) via **easy_install
 nose**) and run **nosetests** or **python setup.py test** in the root
 of the distribution. Tests are located in the *test/* directory.
 
