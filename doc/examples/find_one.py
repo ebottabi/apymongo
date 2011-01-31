@@ -14,7 +14,7 @@ class TestHandler(tornado.web.RequestHandler):
     def get(self):     
         conn = apymongo.Connection()
         coll = conn['testdb']['__ASYNCTEST__']
-        cursor = coll.find_one(callback=self.handle)
+        coll.find_one(callback=self.handle)
         
 
     def handle(self,response):

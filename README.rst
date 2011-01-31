@@ -46,6 +46,22 @@ Examples
 ========
 Here's a basic example (for more see the *examples* section of the docs).
 
+	import json
+	import tornado.web	
+	import apymongo 
+	from apymongo import json_util
+		
+	class TestHandler(tornado.web.RequestHandler):
+	
+		@tornado.web.asynchronous
+		def get(self):     
+			connection = apymongo.Connection()
+			collection = conn['testdb']['testcollection']
+			coll.find_one(callback=self.handle)
+			
+		def handle(self,response):
+			self.write(json.dumps(response,default=json_util.default))
+			self.finish()
 
 
 Documentation
